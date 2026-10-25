@@ -1,5 +1,5 @@
 // =====================================================
-// 🚀 StudySync — Complete Backend (FIXED v15 — tutor is admin in session group)
+// 🚀 StudySync — Complete Backend (FIXED v17 — PeerJS separate)
 // =====================================================
 
 import express from "express";
@@ -16,7 +16,6 @@ import dotenv from "dotenv";
 import { body, validationResult } from "express-validator";
 import { v2 as cloudinary } from "cloudinary";
 import multer from "multer";
-import { PeerServer } from "peer";
 
 dotenv.config();
 
@@ -25,8 +24,6 @@ dotenv.config();
 // =====================================================
 const ENV = {
   PORT: process.env.PORT || 5001,
-  PEER_PORT: process.env.PEER_PORT || 9000,
-  PEER_PATH: process.env.PEER_PATH || "/myapp",
   NODE_ENV: process.env.NODE_ENV || "development",
   MONGO_URI: process.env.MONGO_URI || "mongodb://127.0.0.1:27017/studysync",
   MONGO_FALLBACK_URI: process.env.MONGO_FALLBACK_URI || "mongodb://127.0.0.1:27017/studysync",
@@ -105,7 +102,6 @@ const AVATAR_COLORS = [
 // 📦 MODELS
 // =====================================================
 
-// -------- User --------
 const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, minlength: 2, maxlength: 50 },
@@ -138,7 +134,6 @@ userSchema.methods.comparePassword = function (entered) {
 };
 const User = mongoose.model("User", userSchema);
 
-// -------- Group --------
 const memberSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
@@ -220,7 +215,6 @@ groupSchema.methods.toClient = function () {
 };
 const Group = mongoose.model("Group", groupSchema);
 
-// -------- Message --------
 const messageSchema = new mongoose.Schema(
   {
     group: { type: mongoose.Schema.Types.ObjectId, ref: "Group", required: true, index: true },
@@ -237,7 +231,6 @@ const messageSchema = new mongoose.Schema(
 );
 const Message = mongoose.model("Message", messageSchema);
 
-// -------- Resource --------
 const resourceSchema = new mongoose.Schema(
   {
     title: { type: String, required: true, trim: true },
@@ -255,7 +248,6 @@ const resourceSchema = new mongoose.Schema(
 );
 const Resource = mongoose.model("Resource", resourceSchema);
 
-// -------- Quiz --------
 const questionSchema = new mongoose.Schema({
   question: { type: String, required: true },
   type: { type: String, enum: ["mcq", "flashcard"], default: "mcq" },
@@ -285,7 +277,6 @@ quizSchema.pre("save", function (next) {
 });
 const Quiz = mongoose.model("Quiz", quizSchema);
 
-// -------- Score --------
 const scoreSchema = new mongoose.Schema(
   {
     quiz: { type: mongoose.Schema.Types.ObjectId, ref: "Quiz", required: true },
@@ -310,7 +301,6 @@ scoreSchema.pre("save", function (next) {
 });
 const Score = mongoose.model("Score", scoreSchema);
 
-// -------- Tutor --------
 const availabilitySchema = new mongoose.Schema(
   {
     day: {
@@ -345,7 +335,6 @@ const tutorSchema = new mongoose.Schema(
 );
 const Tutor = mongoose.model("Tutor", tutorSchema);
 
-// -------- Booking --------
 const bookingSchema = new mongoose.Schema(
   {
     student: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
@@ -376,7 +365,6 @@ const bookingSchema = new mongoose.Schema(
 );
 const Booking = mongoose.model("Booking", bookingSchema);
 
-// -------- Review --------
 const reviewSchema = new mongoose.Schema(
   {
     tutor: { type: mongoose.Schema.Types.ObjectId, ref: "Tutor", required: true },
@@ -1334,8 +1322,7 @@ const bookingController = {
     const isStudent = booking.student._id.toString() === req.user._id.toString();
     if (!isTutor && !isStudent) throw new AppError("Not authorized", 403);
 
-    // ✅ Booking confirm YA complete hone pe naya session group create karo
-    // ✅ FIXED: tutor admin hoga, student member
+    // ✅ Tutor admin hoga session group mein
     if ((status === "confirmed" || status === "completed") && !booking.sessionGroup) {
       try {
         const studentName = booking.student?.name || "Student";
@@ -1349,10 +1336,10 @@ const bookingController = {
           emoji: "🎓",
           isPrivate: true,
           maxMembers: 2,
-          admin: tutor.user,                              // ✅ tutor admin
+          admin: tutor.user,
           members: [
-            { user: tutor.user, role: "admin" },          // ✅ tutor admin
-            { user: booking.student._id, role: "member" }, // ✅ student member
+            { user: tutor.user, role: "admin" },
+            { user: booking.student._id, role: "member" },
           ],
           sessionStartedAt: new Date(),
           goal: `Session on ${dateStr}`,
@@ -1365,13 +1352,6 @@ const bookingController = {
 
         booking.sessionGroup = group._id;
         booking.meetingLink = `${allowedOrigins[0]}/groups/${group._id}/room`;
-
-        console.log(
-          "✅ Session group created (tutor as admin):",
-          group._id.toString(),
-          "for booking:",
-          booking._id.toString()
-        );
       } catch (err) {
         console.error("❌ Failed to create session group:", err.message);
       }
@@ -1550,7 +1530,6 @@ app.get("/api/health", (req, res) =>
     env: ENV.NODE_ENV,
     time: new Date().toISOString(),
     allowedOrigins,
-    peer: `ws://localhost:${ENV.PEER_PORT}${ENV.PEER_PATH}`,
   })
 );
 
@@ -1647,7 +1626,6 @@ io.on("connection", (socket) => {
       socket.emit("whiteboard-sync", group.whiteboardStrokes || []);
       socket.emit("goal-sync", group.goal || "");
       socket.emit("lock-sync", group.isLocked || false);
-
       socket.emit("whiteboard-permission", {
         canDraw: group.canDraw(userId),
         isAdmin: group.isAdmin(userId),
@@ -1750,6 +1728,33 @@ io.on("connection", (socket) => {
     socket.to(`group:${groupId}`).emit("cursor-update", { userId, name, x, y });
   });
 
+  // ✅ VIDEO CALL — group-wide broadcast
+  socket.on("video-started", async ({ groupId }) => {
+    try {
+      const group = await Group.findById(groupId);
+      if (!group || !group.isMember(userId)) return;
+      socket.to(`group:${groupId}`).emit("video-started", {
+        startedBy: userId,
+        name,
+      });
+    } catch (err) {
+      socket.emit("error", { message: err.message });
+    }
+  });
+
+  socket.on("video-ended", async ({ groupId }) => {
+    try {
+      const group = await Group.findById(groupId);
+      if (!group || !group.isMember(userId)) return;
+      socket.to(`group:${groupId}`).emit("video-ended", {
+        endedBy: userId,
+        name,
+      });
+    } catch (err) {
+      socket.emit("error", { message: err.message });
+    }
+  });
+
   socket.on("peer-ready", ({ groupId, peerId, name: peerName }) => {
     if (!peerId) return;
     if (!groupPeers.has(groupId)) groupPeers.set(groupId, new Map());
@@ -1808,23 +1813,6 @@ io.on("connection", (socket) => {
 });
 
 app.set("io", io);
-
-// =====================================================
-// 🎥 PEERJS
-// =====================================================
-const peerServer = PeerServer({
-  port: Number(ENV.PEER_PORT),
-  path: ENV.PEER_PATH,
-  allow_discovery: false,
-  proxied: false,
-});
-
-peerServer.on("connection", (client) => {
-  console.log(`🎥 PeerJS connected: ${client.getId()}`);
-});
-peerServer.on("disconnect", (client) => {
-  console.log(`🎥 PeerJS disconnected: ${client.getId()}`);
-});
 
 // =====================================================
 // 🛣️ ROUTES
@@ -2011,7 +1999,6 @@ const start = async () => {
   server.listen(ENV.PORT, () => {
     console.log(`🚀 StudySync API:  http://localhost:${ENV.PORT}`);
     console.log(`🔌 Socket.IO:      ws://localhost:${ENV.PORT}`);
-    console.log(`🎥 PeerJS:         ws://localhost:${ENV.PEER_PORT}${ENV.PEER_PATH}`);
     console.log(`🌐 Allowed origins: ${allowedOrigins.join(", ")}`);
   });
 };
@@ -2028,7 +2015,6 @@ const shutdown = async (signal) => {
   console.log(`\n${signal} received — shutting down...`);
   try { io.close(); } catch {}
   server.close(() => console.log("HTTP server closed"));
-  try { peerServer.close?.(); } catch {}
   try {
     if (mongoose.connection.readyState === 1) {
       await mongoose.connection.close();
