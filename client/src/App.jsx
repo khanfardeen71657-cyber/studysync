@@ -1,3 +1,4 @@
+// client/src/App.jsx
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './context/AuthContext.jsx'
 import { ThemeProvider } from './context/ThemeContext.jsx'
@@ -24,6 +25,7 @@ import NotFound from './pages/NotFound.jsx'
 import MyBookings from './pages/MyBookings.jsx'
 import TutorDashboard from './pages/TutorDashboard.jsx'
 import AdminTutors from './pages/AdminTutors.jsx'
+import CreateGroup from './pages/CreateGroup.jsx'   // ✅ naya import
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -51,7 +53,10 @@ export default function App() {
         <Route path="/join/:inviteCode" element={<JoinGroup />} />
 
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+
+        {/* ✅ Groups — specific routes PEHLE */}
         <Route path="/groups" element={<ProtectedRoute><Groups /></ProtectedRoute>} />
+        <Route path="/groups/create" element={<ProtectedRoute><CreateGroup /></ProtectedRoute>} />
         <Route path="/groups/:id" element={<ProtectedRoute><GroupDetail /></ProtectedRoute>} />
         <Route path="/groups/:id/room" element={<ProtectedRoute><StudyRoom /></ProtectedRoute>} />
 
